@@ -116,7 +116,7 @@ export default function RazorpayModal({ title, description, amount, onClose, onS
         },
         notes: {
           plan: title,
-          source: 'neon-air-draw',
+          source: 'scribble-air-draw',
         },
         theme: { color: '#3399cc' },
         modal: {

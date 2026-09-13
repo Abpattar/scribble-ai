@@ -66,8 +66,8 @@ async function createOrder(request, response) {
     const order = await razorpay.orders.create({
       amount: plan.price,
       currency: plan.currency || 'INR',
-      receipt: `neon-air-${user.userId.slice(0, 8)}-${Date.now()}`,
-      notes: { app: 'neon-air-draw', plan: plan.id },
+      receipt: `scribble-air-${user.userId.slice(0, 8)}-${Date.now()}`,
+      notes: { app: 'scribble-air-draw', plan: plan.id },
     });
 
     await (await profileCollection()).updateOne(
@@ -132,7 +132,7 @@ async function createSubscription(request, response) {
           currency: 'INR',
           description: plan.description,
         },
-        notes: { app: 'neon-air-draw', plan: plan.id },
+        notes: { app: 'scribble-air-draw', plan: plan.id },
       });
     }
 
@@ -140,7 +140,7 @@ async function createSubscription(request, response) {
       plan_id: razorpayPlan.id,
       total_count: plan.totalCount,
       customer_notify: 1,
-      notes: { app: 'neon-air-draw', plan: plan.id },
+      notes: { app: 'scribble-air-draw', plan: plan.id },
     });
 
     await (await profileCollection()).updateOne(
@@ -369,22 +369,40 @@ async function cancelSubscription(request, response) {
     return response.status(401).json({ error: 'Unauthorized: invalid session.' });
   }
 
-  const subId = user.profile?.subscriptionId;
-  if (!subId) {
-    return response.status(200).json({ ok: true, message: 'Nothing to cancel — payments are one-time (no auto-renewal).' });
+  const profile = user.profile || {};
+  const subId = profile.subscriptionId;
+
+  // Best-effort: if there's a real Razorpay subscription, ask Razorpay to end
+  // it. Never fail the request if the Subscriptions API isn't enabled on the
+  // account (one-time orders have nothing to cancel there) — cancellation is
+  // finalised locally regardless.
+  if (subId) {
+    try {
+      const keyId = process.env.RAZORPAY_KEY_ID || process.env.VITE_RAZORPAY_KEY_ID;
+      const keySecret = process.env.RAZORPAY_KEY_SECRET;
+      if (keyId && keySecret) {
+        await new Razorpay({ key_id: keyId, key_secret: keySecret }).subscriptions.cancel(subId, true);
+      }
+    } catch (error) {
+      console.error('Razorpay subscription cancel failed (continuing):', error?.message || error);
+    }
   }
 
-  try {
-    const keyId = process.env.RAZORPAY_KEY_ID || process.env.VITE_RAZORPAY_KEY_ID;
-    const keySecret = process.env.RAZORPAY_KEY_SECRET;
-    const razorpay = new Razorpay({ key_id: keyId, key_secret: keySecret });
-    await razorpay.subscriptions.cancel(subId, true); // true = cancel at period end
-    await (await profileCollection()).updateOne({ _id: user.userId }, { $set: { cancelledAt: Date.now(), updatedAt: Date.now() } });
-    return response.status(200).json({ ok: true, message: 'Subscription will end at the current billing period close.' });
-  } catch (error) {
-    console.error('Failed to cancel subscription:', error);
-    return response.status(502).json({ error: 'Unable to cancel subscription right now.' });
-  }
+  // One-time orders have no auto-renewal, so "cancel" ends the paid period
+  // now at the user's request. Payment history stays for the record.
+  await (await profileCollection()).updateOne(
+    { _id: user.userId },
+    {
+      $set: {
+        subscribed: false,
+        subscribedUntil: 0,
+        cancelledAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+    }
+  );
+
+  return response.status(200).json({ ok: true, message: 'Subscription cancelled.' });
 }
 
 async function webhook(request, response) {

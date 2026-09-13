@@ -128,11 +128,12 @@ export default function SubscriptionModal({
   }
 
   async function handleCancel() {
-    if (!confirm('Cancel your subscription? You keep Pro until the end of the current period.')) return;
+    if (!confirm('Cancel your subscription? One-time payments don\'t auto-renew — cancelling ends your Pro access now.')) return;
     setBusyId('cancel');
     try {
-      await api.post('/api/cancel-subscription');
+      const res = await api.post('/api/cancel-subscription');
       await onCancel();
+      alert(res?.message || 'Subscription cancelled.');
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Could not cancel right now.');
     } finally {

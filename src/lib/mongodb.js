@@ -15,7 +15,7 @@ let clientPromisePromise = null;
 
 function createClient() {
   const client = new MongoClient(uri, {
-    appName: 'neon-air-draw',
+    appName: 'scribble-air-draw',
     connectTimeoutMS: 5000,
     serverSelectionTimeoutMS: 5000,
   });

@@ -1,10 +1,12 @@
-# Neon Air Draw — React port
+# Scribble Air Draw
 
-A React + TypeScript + Tailwind rebuild of the original single-file HTML app.
-Hand-tracking (MediaPipe), stroke rendering, gestures, zoom/pan, gallery,
-Clerk auth + MongoDB sync — all ported with the same constants and math as
-the original, so drawing accuracy/feel is unchanged. The login screen uses
-Clerk's hosted sign-in component.
+A React + TypeScript + Tailwind app that turns a webcam into a drawing
+surface: wave your hand in the air and your fingertip becomes the pen. Built
+with MediaPipe hand-tracking, stroke rendering, gestures, zoom/pan, a
+trace-template library, Clerk auth + MongoDB sync, and Razorpay billing.
+
+Earlier internal names were "NeonAir" / "Neon Air Draw"; the product is
+**Scribble Air Draw**. The MongoDB database is still named `neonair`.
 
 ## Run it
 
@@ -13,10 +15,13 @@ npm install
 npm run dev
 ```
 
+Vite serves the app on http://localhost:5173 and mounts the same
+`api/*` handlers locally (via `server/devServer.js`, port 8787) so profiles,
+drawings and billing behave exactly like production.
+
 ## Environment variables
 
-Copy the values into `.env` at the project root (Vite reads it and the
-serverless functions in `api/` read the same file via `vercel dev`):
+Copy the values into `.env` at the project root:
 
 ```env
 # Clerk — frontend only (safe in the browser)
@@ -37,6 +42,30 @@ RAZORPAY_WEBHOOK_SECRET=...
 The browser only ever sees `VITE_CLERK_PUBLISHABLE_KEY`. All secrets stay on
 the server. For deployment, add the same variables to Vercel Project Settings.
 
+## Billing (one-time payment)
+
+Billing uses Razorpay **Orders** (one-time, no auto-renewal), not the
+Subscriptions/Recurring API.
+
+- `api/billing.js` `createOrder` validates the signed-in Clerk user, stores a
+  `pendingPlan` on the profile, and mints a Razorpay order in the plan's
+  currency/amount.
+- The frontend opens Razorpay Checkout with that `order_id`, then calls
+  `verifyPayment`, which verifies the signature and marks the profile
+  `subscribed` with the correct plan/period/`subscribedUntil` from the stored
+  `pendingPlan`.
+- `cancelSubscription` ends a subscriber's paid period immediately (and
+  best-effort cancels any real Razorpay subscription); payment history stays.
+- Payment states are also reconciled via the Razorpay webhook endpoint.
+
+Reasons we're on Orders rather than Subscriptions: on this test account the
+Razorpay Recurring/Subscriptions API was disabled (401). To move to
+subscriptions later, enable Recurring Payments and Subscriptions in the
+Razorpay dashboard.
+
+Local test card: `4111 1111 1111 1111`, any future expiry, any CVV,
+OTP `1221`.
+
 ## Backend (Vercel serverless functions)
 
 The API is consolidated into a small number of route-dispatching functions to
@@ -50,10 +79,7 @@ unchanged.
   so a caller's uid can never be spoofed.
 - `api/billing.js` — `?route=` switch over `/api/create-order`,
   `/api/create-subscription`, `/api/verify-payment`, `/api/check-subscription`,
-  `/api/cancel-subscription` and `/api/razorpay-webhook`. Creates orders and
-  subscriptions, verifies the Razorpay signature + Clerk session token before
-  flipping `subscribed: true` on the user's MongoDB document (clients cannot
-  set `subscribed` themselves), syncs against Razorpay, and processes webhooks.
+  `/api/cancel-subscription` and `/api/razorpay-webhook`.
 - `api/friends.js` — friend graph plus the pending-request counter at
   `/api/friends/requests`.
 - `api/groups.js` — group CRUD plus single-group actions (`/api/groups/:groupId`).
@@ -63,27 +89,18 @@ unchanged.
   competition actions under `/api/admin*`.
 - `api/plans.js` — public plan catalog.
 
-To test the frontend and API functions together, install the Vercel CLI and run:
-
-```bash
-npm install -g vercel
-vercel dev
-```
-
-Use Razorpay test credentials locally and switch to live credentials only when
-the Razorpay account is ready to accept real payments.
-
 ## Structure
 
 - `src/lib/engine.ts` — the drawing/hand-tracking engine (canvas, MediaPipe,
   gesture state machine, stroke cache) as a plain class.
 - `src/lib/mongodb.js`, `src/lib/serverAuth.js` — server-side Mongo client and
   Clerk session verification used by the API functions.
-- `src/hooks/useAuth.ts`, `src/hooks/useProfile.ts` — Clerk auth wrapper + the
-  gallery/drawings/favorites/version-history persistence logic (backed by
-  `api/profile.js` → MongoDB).
+- `src/hooks/useAuth.ts`, `src/hooks/useProfile.ts` — Clerk auth wrapper, plus
+  the gallery/drawings/favorites/version-history + subscription entitlement
+  logic (client-side "is this feature unlocked?" gates).
 - `src/components/` — Clerk sign-in, onboarding (nickname/welcome), the tools
-  panel, the gallery panel, and the stats/history/profile modals.
+  panel, gallery panel, TemplatesModal (trace-template library),
+  SubscriptionModal (plan + checkout), and stats/history/profile modals.
 - `src/App.tsx` — wires it all together and owns the app's stage machine
   (landing → login → nickname → app).
 
@@ -93,3 +110,16 @@ the Razorpay account is ready to accept real payments.
   [Clerk Dashboard](https://dashboard.clerk.com).
 - Documents live in the `neonair` database, `profiles` collection on your
   MongoDB cluster, keyed by the Clerk user id.
+
+## Deployment
+
+- Git push to `main` triggers a Vercel deploy. The production alias
+  `scribble-ai.vercel.app` (and the *.vercel.app per-deploy URL) are pinned
+  manually after each deploy:
+
+  ```bash
+  vercel alias set <deployment-url> scribble-ai.vercel.app
+  ```
+
+- Vercel project: `scribble-hcfo26h6q-adityas-projects-cf1e02fd.vercel.app`
+  (see `vercel.json`, `.vercel/project.json`).
