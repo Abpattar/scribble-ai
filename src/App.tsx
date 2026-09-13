@@ -311,7 +311,13 @@ export default function App() {
   };
   const onReplay = () => {
     if (!gate('replay', 'Unlock drawing replay with Pro.')) return;
-    eng()?.replay();
+    const engine = eng();
+    if (!engine) return;
+    if (!engine.getStrokes().length) {
+      setHint('✍ Draw something first, then hit replay.');
+      return;
+    }
+    engine.replay();
   };
   const wakeCamera = async () => {
     const engine = engineRef.current;
@@ -326,6 +332,10 @@ export default function App() {
     if (!gate('record', 'Unlock recording your drawing with Pro.')) return;
     const engine = eng();
     if (!engine) return;
+    if (!engine.getStrokes().length) {
+      setHint('✍ Draw something first, then hit record.');
+      return;
+    }
     setRecording(true);
     const rec = engine.record(profile.currentName);
     recorderRef.current = rec || null;

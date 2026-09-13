@@ -95,8 +95,8 @@ export default function SubscriptionModal({
           const idToken = await session?.getToken();
           const v = await api.post('/api/verify-payment', { ...res, idToken });
           if (!v.verified) throw new Error(v.error || 'Payment verification failed');
-          setStep('success');
           await onSubscribed();
+          setStep('success');
           window.setTimeout(onClose, 1400);
         } catch (err) {
           console.error('payment verification failed', err);

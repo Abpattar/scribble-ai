@@ -139,7 +139,8 @@ export class DrawEngine {
   stream: MediaStream | null = null;
   destroyed = false;
   // True while the camera is hibernated (idle timeout or leaving the canvas).
-  cameraOffForIdle = false;
+cameraOffForIdle = false;
+  frameLoopRunning = false;
   // Timestamp of the last frame that actually saw a hand. 0 = never seen one.
   lastHandSeen = 0;
 
@@ -1043,6 +1044,7 @@ export class DrawEngine {
   hibernate() {
     if (this.cameraOffForIdle || this.destroyed) return;
     this.cameraOffForIdle = true;
+    this.frameLoopRunning = false;
     this.confirmedGesture = 'none';
     this.peaceStreak = 0;
     try {
@@ -1057,7 +1059,7 @@ export class DrawEngine {
   }
 
   async resumeCamera() {
-    if (!this.cameraOffForIdle || this.destroyed) return true;
+    if (this.destroyed || this.frameLoopRunning) return this.frameLoopRunning;
     try {
       this.stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
@@ -1071,9 +1073,27 @@ export class DrawEngine {
     } catch {}
     this.cameraOffForIdle = false;
     this.lastHandSeen = Date.now();
-    try {
-      await this.camera?.start?.();
-    } catch {}
+    // Recreate the MediaPipe frame loop instead of calling start() on the old
+    // Camera instance: after stop() the old loop can sit on a stale
+    // video.currentTime and never emit frames again — tapping "wake" would
+    // hide the overlay but leave tracking dead. A fresh Camera reliably
+    // resumes feeding the hands model.
+    if (this.hands && (window as any).Camera) {
+      try {
+        this.camera?.stop?.();
+      } catch {}
+      this.camera = new (window as any).Camera(this.cam, {
+        onFrame: async () => {
+          try {
+            await this.hands.send({ image: this.cam });
+          } catch {}
+        },
+        width: 1280,
+        height: 720,
+      });
+      this.camera.start();
+      this.frameLoopRunning = true;
+    }
     this.cb.onCamWake?.();
     if (!this.camPaused) this.cb.onHint(DEFAULT_HINT);
     return true;
@@ -1165,6 +1185,7 @@ export class DrawEngine {
         height: 720,
       });
       this.camera.start();
+      this.frameLoopRunning = true;
     } catch {
       this.cb.onProgress(90, '⚠ Could not start camera loop — reload and try again');
     }
@@ -1172,6 +1193,7 @@ export class DrawEngine {
 
   destroy() {
     this.destroyed = true;
+    this.frameLoopRunning = false;
     try {
       this.camera?.stop?.();
     } catch {}
