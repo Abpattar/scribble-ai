@@ -875,7 +875,7 @@ cameraOffForIdle = false;
       this.confirmedGesture = 'none';
       this.peaceStreak = 0;
       this.fillTriggered = false;
-      if (this.lastHandSeen > 0 && Date.now() - this.lastHandSeen >= IDLE_CAMERA_OFF_MS) {
+      if (this.lastHandSeen > 0 && Date.now() - this.lastHandSeen >= IDLE_CAMERA_OFF_MS && !this.camPaused) {
         this.hibernate();
       }
       return;
@@ -1091,12 +1091,17 @@ cameraOffForIdle = false;
         width: 1280,
         height: 720,
       });
-      this.camera.start();
-      this.frameLoopRunning = true;
+      try {
+        this.camera.start();
+        this.frameLoopRunning = true;
+      } catch {
+        return false; // keep the wake prompt up so the user can retry
+      }
+      this.cb.onCamWake?.();
+      if (!this.camPaused) this.cb.onHint(DEFAULT_HINT);
+      return true;
     }
-    this.cb.onCamWake?.();
-    if (!this.camPaused) this.cb.onHint(DEFAULT_HINT);
-    return true;
+    return false; // hands/camera utils unavailable — don't hide the wake prompt
   }
 
   async start() {

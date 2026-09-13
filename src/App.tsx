@@ -295,7 +295,7 @@ export default function App() {
   };
   const onExport = () => eng()?.exportPNG(profile.currentName);
   const onPickTemplate = async (tpl: Template) => {
-    if (!gate('templates', 'Unlock the trace template library with Pro.')) return;
+    if (!tpl.free && !gate('templates', 'Unlock the trace template library with Pro.')) return;
     const engine = eng();
     if (!engine) return;
     await engine.setBgImageFromUrl(tpl.url);

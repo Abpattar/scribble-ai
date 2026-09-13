@@ -145,8 +145,8 @@ export default function SubscriptionModal({
   const fmtDate = subscribedUntil ? new Date(subscribedUntil).toLocaleDateString() : null;
 
   return (
-    <div className="modal-overlay" style={{ zIndex: 90 }}>
-      <div className="modal-box" style={{ width: 360, maxWidth: '92vw' }}>
+    <div className="modal-overlay" style={{ zIndex: 90 }} onClick={onClose}>
+      <div className="modal-box" style={{ width: 360, maxWidth: '92vw' }} onClick={(e) => e.stopPropagation()}>
         <div className="close-btn" onClick={onClose} title="Close"><X size={16} /></div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>

@@ -32,7 +32,25 @@ export const FREE_TIER_FEATURES: Features = {
   battles: true,
 };
 
+const ALL_PRO_FEATURES: Features = {
+  templates: true,
+  background_images: true,
+  export_transparent: true,
+  replay: true,
+  record: true,
+  battles: true,
+};
+
 export const DEFAULT_GALLERY_LIMIT = 3;
+
+// Trust the user's subscription over whatever the server's plan-lookup
+// happened to resolve. If a paying user is ever reported free-tier features
+// (e.g. a transient plan-catalog hiccup), they must not be locked out of the
+// features they paid for — the server remains the source of truth for writes.
+function entitlementFeatures(isPro: boolean, serverFeatures?: Partial<Features>): Features {
+  const base = { ...FREE_TIER_FEATURES, ...(serverFeatures || {}) };
+  return isPro ? { ...base, ...ALL_PRO_FEATURES } : base;
+}
 
 // Fetches the user's profile document from MongoDB via the serverless API.
 // The Clerk session JWT (Authorization header) identifies the user server-side —
@@ -122,8 +140,8 @@ export function useProfile() {
           until = profile.subscribedUntil || null;
           pays = profile.payments || [];
           av = profile.avatar || null;
-          ft = profile.features ? { ...FREE_TIER_FEATURES, ...profile.features } : ft;
-          gl = typeof profile.galleryLimit === 'number' ? profile.galleryLimit : DEFAULT_GALLERY_LIMIT;
+          ft = entitlementFeatures(sub, profile.features);
+          gl = sub ? -1 : typeof profile.galleryLimit === 'number' ? profile.galleryLimit : DEFAULT_GALLERY_LIMIT;
         }
       } catch (e) {
         console.error('Failed to load saved drawings:', e);
@@ -169,14 +187,15 @@ export function useProfile() {
     try {
       const { profile } = await apiRequest();
       if (!profile) return;
-      setSubscribedState(!!profile.subscribed || (profile.subscribedUntil || 0) > Date.now());
+      const isPro = !!profile.subscribed || (profile.subscribedUntil || 0) > Date.now();
+      setSubscribedState(isPro);
       setRole(profile.role || 'user');
       setPlan(profile.plan || null);
       setSubscribedUntil(profile.subscribedUntil || null);
       setPayments(profile.payments || []);
       setAvatar(profile.avatar || '');
-      setFeatures(profile.features ? { ...FREE_TIER_FEATURES, ...profile.features } : { ...FREE_TIER_FEATURES });
-      setGalleryLimit(typeof profile.galleryLimit === 'number' ? profile.galleryLimit : DEFAULT_GALLERY_LIMIT);
+      setFeatures(entitlementFeatures(isPro, profile.features));
+      setGalleryLimit(isPro ? -1 : typeof profile.galleryLimit === 'number' ? profile.galleryLimit : DEFAULT_GALLERY_LIMIT);
     } catch (e) {
       console.error('Failed to refresh profile:', e);
       throw e;
