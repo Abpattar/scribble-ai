@@ -44,22 +44,38 @@ async function createOrder(request, response) {
     return response.status(405).json({ error: 'Method not allowed' });
   }
 
+  const user = await requireUser(request);
+  if (!user) {
+    return response.status(401).json({ error: 'Unauthorized: invalid session.' });
+  }
+
   const keyId = process.env.RAZORPAY_KEY_ID || process.env.VITE_RAZORPAY_KEY_ID;
   const keySecret = process.env.RAZORPAY_KEY_SECRET;
   if (!keyId || !keySecret) {
     return response.status(500).json({ error: 'Razorpay server configuration is missing.' });
   }
 
+  await ensurePlans();
+  const plan = await (await planCollection()).findOne({ id: request.body?.planId, active: true, free: { $ne: true } });
+  if (!plan) {
+    return response.status(400).json({ error: 'Unknown or disabled plan.' });
+  }
+
   try {
     const razorpay = new Razorpay({ key_id: keyId, key_secret: keySecret });
     const order = await razorpay.orders.create({
-      amount: 9900,
-      currency: 'INR',
-      receipt: `scribble-air-${Date.now()}`,
-      notes: { product: 'Scribble Air Pro' },
+      amount: plan.price,
+      currency: plan.currency || 'INR',
+      receipt: `neon-air-${user.userId.slice(0, 8)}-${Date.now()}`,
+      notes: { app: 'neon-air-draw', plan: plan.id },
     });
 
-    return response.status(200).json({ orderId: order.id, amount: order.amount, currency: order.currency, keyId });
+    await (await profileCollection()).updateOne(
+      { _id: user.userId },
+      { $set: { pendingPlan: plan.id, updatedAt: Date.now() } }
+    );
+
+    return response.status(200).json({ orderId: order.id, amount: order.amount, currency: order.currency, keyId, plan: plan.id });
   } catch (error) {
     console.error('Razorpay order creation failed', error);
     return response.status(502).json({ error: 'Unable to create a Razorpay order.' });
@@ -154,6 +170,13 @@ async function createSubscription(request, response) {
     });
   } catch (error) {
     console.error('Razorpay subscription creation failed', error);
+    const raw = String(error?.error?.description || error?.message || '');
+    if (/authentication|key.?id|secret|unauthor/i.test(raw)) {
+      return response.status(502).json({ error: 'Razorpay rejected the API keys. Check the key id/secret configured on Vercel.' });
+    }
+    if (/subscription|recurring|activated|plan/i.test(raw)) {
+      return response.status(502).json({ error: 'Razorpay subscriptions are not enabled on this account yet. Enable Recurring Payments in the Razorpay Dashboard.' });
+    }
     return response.status(502).json({ error: 'Unable to create a Razorpay subscription.' });
   }
 }
@@ -249,17 +272,34 @@ async function verifyPayment(request, response) {
         { upsert: true }
       );
     } else {
+      const profile = await col.findOne({ _id: userId });
+      await ensurePlans();
+      const dbPlan = await (await planCollection()).findOne({ id: profile?.pendingPlan || 'monthly' }) || null;
+      const periodKey = (dbPlan?.period && PERIOD_MS[dbPlan.period]) ? dbPlan.period : 'monthly';
+      const plan = {
+        id: dbPlan?.id || 'monthly',
+        label: dbPlan?.label || 'Monthly',
+        price: dbPlan?.price || 9900,
+        period: periodKey,
+      };
       await col.updateOne(
         { _id: userId },
         {
-          $set: { subscribed: true, subscribedUntil: Date.now() + PERIOD_MS.monthly, plan: 'monthly', updatedAt: Date.now() },
+          $set: {
+            subscribed: true,
+            plan: plan.id,
+            planPeriod: plan.period,
+            subscribedUntil: Date.now() + PERIOD_MS[plan.period],
+            pendingPlan: null,
+            updatedAt: Date.now(),
+          },
           $push: {
             payments: {
               paymentId: razorpay_payment_id,
               orderId: razorpay_order_id,
-              amount: 9900,
+              amount: plan.price,
               currency: 'INR',
-              plan: 'monthly',
+              plan: plan.id,
               ts: Date.now(),
               status: 'charged',
             },
@@ -331,7 +371,7 @@ async function cancelSubscription(request, response) {
 
   const subId = user.profile?.subscriptionId;
   if (!subId) {
-    return response.status(400).json({ error: 'No active subscription to cancel.' });
+    return response.status(200).json({ ok: true, message: 'Nothing to cancel — payments are one-time (no auto-renewal).' });
   }
 
   try {
@@ -373,10 +413,14 @@ async function webhook(request, response) {
     const subscriptionId = entity.subscription_id || entity.id || '';
     if (!subscriptionId) return response.status(200).json({ ok: true });
 
+    // Covers both webhook v1 and v2 event names for Razorpay subscriptions.
+    const chargedEvents = ['payment.captured', 'subscription.charged', 'payment.authorized'];
+    const endedEvents = ['subscription.cancelled', 'subscription.completed', 'subscription.expired', 'subscription.paused', 'subscription.halted'];
+
     const col = await profileCollection();
     const profile = await col.findOne({ subscriptionId });
 
-    if (event === 'payment.captured' || event === 'subscription.charged') {
+    if (chargedEvents.includes(event)) {
       const paymentId = entity.id || '';
       const payments = Array.isArray(profile?.payments) ? profile.payments : [];
       if (profile && !payments.some((p) => p.paymentId === paymentId)) {
@@ -400,7 +444,7 @@ async function webhook(request, response) {
           }
         );
       }
-    } else if (['subscription.cancelled', 'subscription.completed', 'subscription.expired', 'subscription.paused'].includes(event)) {
+    } else if (endedEvents.includes(event)) {
       if (profile) {
         const stillActive = (profile.subscribedUntil || 0) > Date.now() && entity.status === 'active';
         await col.updateOne({ _id: profile._id }, { $set: { subscribed: stillActive, updatedAt: Date.now() } });

@@ -1,5 +1,5 @@
 import { useState, type CSSProperties } from 'react';
-import { useClerk } from '@clerk/clerk-react';
+import { useSession } from '@clerk/clerk-react';
 
 interface Props {
   title: string;
@@ -46,7 +46,7 @@ function loadRazorpayScript() {
 }
 
 export default function RazorpayModal({ title, description, amount, onClose, onSuccess }: Props) {
-  const { session } = useClerk();
+  const { session } = useSession();
   const [method, setMethod] = useState<Method>('upi');
   const [step, setStep] = useState<Step>('method');
   const [upiId, setUpiId] = useState('');

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { X, Check, Zap, Sparkles } from 'lucide-react';
-import { useClerk } from '@clerk/clerk-react';
+import { useSession } from '@clerk/clerk-react';
 import { useApi } from '../hooks/useApi';
 import { DEFAULT_PLAN_PAYLOAD, FEATURE_CATALOG, type FeatureDef } from '../lib/plans';
 
@@ -59,7 +59,7 @@ export default function SubscriptionModal({
   onCancel,
 }: Props) {
   const api = useApi();
-  const { session } = useClerk();
+  const { session } = useSession();
   // Seeded defaults render instantly and persist if /api/plans is unreachable.
   const [plans, setPlans] = useState<Plan[]>(DEFAULT_PLAN_PAYLOAD.plans);
   const [catalog, setCatalog] = useState<FeatureDef[]>(FEATURE_CATALOG);
@@ -83,7 +83,10 @@ export default function SubscriptionModal({
     setError('');
     setBusyId(pl.id);
     try {
-      const sub = await api.post('/api/create-subscription', { planId: pl.id });
+      const ord = await api.post('/api/create-order', { planId: pl.id });
+      if (!ord.orderId || !ord.keyId) {
+        throw new Error(ord.error || 'Payment server returned an invalid response.');
+      }
       const loaded = await loadCheckout();
       if (!loaded || !(window as any).Razorpay) throw new Error('Razorpay checkout script failed to load');
 
@@ -96,28 +99,29 @@ export default function SubscriptionModal({
           await onSubscribed();
           window.setTimeout(onClose, 1400);
         } catch (err) {
-          console.error('subscription verification failed', err);
+          console.error('payment verification failed', err);
           setError(err instanceof Error ? err.message : 'Verification failed');
           setBusyId(null);
         }
       };
 
+      const email = session?.user?.emailAddresses?.[0]?.emailAddress || '';
+      const name = session?.user?.fullName || session?.user?.username || '';
       const r = new (window as any).Razorpay({
-        key: sub.keyId,
-        subscription_id: sub.subscriptionId,
-        plan_id: sub.planId,
-        amount: pl.price,
-        currency: 'INR',
+        key: ord.keyId,
+        order_id: ord.orderId,
+        amount: ord.amount,
+        currency: ord.currency || 'INR',
         name: 'Neon Air Draw',
         description: pl.description,
-        prefill: { email: sub.customer?.email || '', name: sub.customer?.name || '' },
+        prefill: { email, name },
         handler,
         theme: { color: '#ff6b4a' },
         modal: { ondismiss: () => setBusyId(null) },
       });
       r.open();
     } catch (err) {
-      console.error('subscription checkout failed', err);
+      console.error('checkout failed', err);
       setError(err instanceof Error ? err.message : 'Unable to start Razorpay Checkout.');
       setBusyId(null);
     }
@@ -230,7 +234,7 @@ export default function SubscriptionModal({
         )}
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10.5, color: 'var(--kid-green)', marginTop: 6 }}>
-          <Check size={12} /> Cancel anytime · In-app receipts · Payments via Razorpay (₹)
+          <Check size={12} /> One-time payment · No auto-renewal · Receipts in-app · Razorpay (₹)
         </div>
 
         {error && <div style={{ fontSize: 11.5, color: 'var(--kid-pink)', marginTop: 8 }}>{error}</div>}

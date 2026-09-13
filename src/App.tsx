@@ -18,7 +18,6 @@ import GroupsModal, { type Group } from './components/GroupsModal';
 import CompetitionsModal from './components/CompetitionsModal';
 import AdminPage from './components/AdminPage';
 import type { Template } from './lib/templates';
-import Razorpay from './components/TestRazorpayUI';
 
 const CHALLENGES = [
   'Draw a creature that lives in clouds', 'Draw your morning coffee', 'Draw a robot pet',
