@@ -101,25 +101,26 @@ async function mount(segments, file) {
 
 await mount(['api', 'profile'], 'profile.js');
 await mount(['api', 'plans'], 'plans.js');
-await mount(['api', 'create-subscription'], 'create-subscription.js');
-await mount(['api', 'verify-payment'], 'verify-payment.js');
-await mount(['api', 'check-subscription'], 'check-subscription.js');
-await mount(['api', 'cancel-subscription'], 'cancel-subscription.js');
-await mount(['api', 'razorpay-webhook'], 'razorpay-webhook.js');
+await mount(['api', 'create-order'], 'billing.js');
+await mount(['api', 'create-subscription'], 'billing.js');
+await mount(['api', 'verify-payment'], 'billing.js');
+await mount(['api', 'check-subscription'], 'billing.js');
+await mount(['api', 'cancel-subscription'], 'billing.js');
+await mount(['api', 'razorpay-webhook'], 'billing.js');
 await mount(['api', 'friends'], 'friends.js');
-await mount(['api', 'friends', 'requests'], 'friends/requests.js');
+await mount(['api', 'friends', 'requests'], 'friends.js');
 await mount(['api', 'groups'], 'groups.js');
-await mount(['api', 'groups', ':groupId'], 'groups/[groupId].js');
+await mount(['api', 'groups', ':groupId'], 'groups.js');
 await mount(['api', 'competitions'], 'competitions.js');
-await mount(['api', 'competitions', ':competitionId'], 'competitions/[competitionId].js');
+await mount(['api', 'competitions', ':competitionId'], 'competitions.js');
 await mount(['api', 'admin'], 'admin.js');
-await mount(['api', 'admin', 'users'], 'admin/users.js');
-await mount(['api', 'admin', 'users', ':userId'], 'admin/users/[userId].js');
-await mount(['api', 'admin', 'billing'], 'admin/billing.js');
-await mount(['api', 'admin', 'groups', ':groupId'], 'admin/groups/[groupId].js');
-await mount(['api', 'admin', 'competitions', ':competitionId'], 'admin/competitions/[competitionId].js');
-await mount(['api', 'admin', 'plans'], 'admin/plans.js');
-await mount(['api', 'admin', 'plans', ':planId'], 'admin/plans/[planId].js');
+await mount(['api', 'admin', 'users'], 'admin.js');
+await mount(['api', 'admin', 'users', ':userId'], 'admin.js');
+await mount(['api', 'admin', 'billing'], 'admin.js');
+await mount(['api', 'admin', 'groups', ':groupId'], 'admin.js');
+await mount(['api', 'admin', 'competitions', ':competitionId'], 'admin.js');
+await mount(['api', 'admin', 'plans'], 'admin.js');
+await mount(['api', 'admin', 'plans', ':planId'], 'admin.js');
 
 const server = createServer(async (nodeReq, nodeRes) => {
   const url = new URL(nodeReq.url || '/', 'http://localhost');

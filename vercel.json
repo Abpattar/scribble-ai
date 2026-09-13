@@ -3,6 +3,22 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "rewrites": [
+    { "source": "/api/friends/requests", "destination": "/api/friends?route=requests" },
+    { "source": "/api/groups/:groupId", "destination": "/api/groups?route=group&groupId=:groupId" },
+    { "source": "/api/competitions/:competitionId", "destination": "/api/competitions?route=competition&competitionId=:competitionId" },
+    { "source": "/api/admin/users/:userId", "destination": "/api/admin?route=user&userId=:userId" },
+    { "source": "/api/admin/users", "destination": "/api/admin?route=users" },
+    { "source": "/api/admin/billing", "destination": "/api/admin?route=billing" },
+    { "source": "/api/admin/plans/:planId", "destination": "/api/admin?route=plan&planId=:planId" },
+    { "source": "/api/admin/plans", "destination": "/api/admin?route=plans" },
+    { "source": "/api/admin/groups/:groupId", "destination": "/api/admin?route=group&groupId=:groupId" },
+    { "source": "/api/admin/competitions/:competitionId", "destination": "/api/admin?route=competition&competitionId=:competitionId" },
+    { "source": "/api/create-order", "destination": "/api/billing?route=create-order" },
+    { "source": "/api/create-subscription", "destination": "/api/billing?route=create-subscription" },
+    { "source": "/api/verify-payment", "destination": "/api/billing?route=verify-payment" },
+    { "source": "/api/check-subscription", "destination": "/api/billing?route=check-subscription" },
+    { "source": "/api/cancel-subscription", "destination": "/api/billing?route=cancel-subscription" },
+    { "source": "/api/razorpay-webhook", "destination": "/api/billing?route=webhook" },
     { "source": "/(.*)", "destination": "/index.html" }
   ]
 }

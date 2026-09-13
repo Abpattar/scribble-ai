@@ -14,12 +14,31 @@ async function resolveUsers(ids) {
 }
 
 export default async function handler(request, response) {
+  const isRequestsRoute = request.query?.route === 'requests' || (request.url || '').includes('/requests');
+  if (isRequestsRoute && request.method === 'GET') return pendingRequests(request, response);
   const user = await requireUser(request);
   if (!user) return response.status(401).json({ error: 'Unauthorized: invalid session.' });
 
   if (request.method === 'GET') return getFriends(request, response, user);
   if (request.method === 'POST') return postFriends(request, response, user);
   return response.status(405).json({ error: 'Method not allowed' });
+}
+
+async function pendingRequests(request, response) {
+  const user = await requireUser(request);
+  if (!user) {
+    return response.status(401).json({ error: 'Unauthorized: invalid session.' });
+  }
+  try {
+    const count = await (await friendshipCollection()).countDocuments({
+      status: 'pending',
+      actionUserId: { $ne: user.userId },
+      $or: [{ userA: user.userId }, { userB: user.userId }],
+    });
+    return response.status(200).json({ count });
+  } catch (error) {
+    return response.status(500).json({ error: error?.message || 'Could not load friend requests.' });
+  }
 }
 
 async function getFriends(request, response, user) {

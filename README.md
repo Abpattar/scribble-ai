@@ -39,14 +39,29 @@ the server. For deployment, add the same variables to Vercel Project Settings.
 
 ## Backend (Vercel serverless functions)
 
+The API is consolidated into a small number of route-dispatching functions to
+stay within the Vercel Hobby plan's 12-serverless-function limit. Legacy paths
+are preserved through `vercel.json` rewrites, so the frontend's URLs are
+unchanged.
+
 - `api/profile.js` — GET/POST the user's profile document (drawings,
   favorites, history, nickname, bio, subscription) to MongoDB. The user is
   identified by the Clerk session JWT sent as `Authorization: Bearer <token>`,
   so a caller's uid can never be spoofed.
-- `api/create-order.js` — creates a Razorpay order.
-- `api/verify-payment.js` — verifies the Razorpay signature and the Clerk
-  session token, then flips `subscribed: true` on the user's MongoDB
-  document. Clients cannot set `subscribed` themselves.
+- `api/billing.js` — `?route=` switch over `/api/create-order`,
+  `/api/create-subscription`, `/api/verify-payment`, `/api/check-subscription`,
+  `/api/cancel-subscription` and `/api/razorpay-webhook`. Creates orders and
+  subscriptions, verifies the Razorpay signature + Clerk session token before
+  flipping `subscribed: true` on the user's MongoDB document (clients cannot
+  set `subscribed` themselves), syncs against Razorpay, and processes webhooks.
+- `api/friends.js` — friend graph plus the pending-request counter at
+  `/api/friends/requests`.
+- `api/groups.js` — group CRUD plus single-group actions (`/api/groups/:groupId`).
+- `api/competitions.js` — battle list/create plus single-competition sync,
+  submit and vote (`/api/competitions/:competitionId`).
+- `api/admin.js` — overview, users, billing, plans and destructive group /
+  competition actions under `/api/admin*`.
+- `api/plans.js` — public plan catalog.
 
 To test the frontend and API functions together, install the Vercel CLI and run:
 
