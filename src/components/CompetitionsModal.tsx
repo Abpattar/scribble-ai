@@ -150,10 +150,11 @@ function InfoTip({ children, icon }: { children: React.ReactNode; icon?: React.R
 
 function DrawingStage({ battle, getStrokes, onSubmit }: { battle: CompetitionDetail; getStrokes: () => Stroke[]; onSubmit: () => void }) {
   const api = useApi();
+  const [submitting, setSubmitting] = useState(false);
   const submitted = Boolean(battle.entries?.find((e) => String(e.groupId) === String(battle.myGroup))?.submittedAt);
 
   useEffect(() => {
-    if (Date.now() >= battle.drawEndTime) return;
+    if (submitted || Date.now() >= battle.drawEndTime) return;
     const timer = setInterval(async () => {
       if (Date.now() >= battle.drawEndTime) return;
       try {
@@ -163,7 +164,21 @@ function DrawingStage({ battle, getStrokes, onSubmit }: { battle: CompetitionDet
       }
     }, AUTO_SYNC_MS);
     return () => clearInterval(timer);
-  }, [api, battle.id, battle.drawEndTime, getStrokes]);
+  }, [api, battle.id, battle.drawEndTime, getStrokes, submitted]);
+
+  async function doSubmit() {
+    if (submitting || submitted) return;
+    setSubmitting(true);
+    try {
+      await api.post(`/api/competitions/${battle.id}`, { action: 'submit', strokes: getStrokes() });
+      await new Promise((r) => setTimeout(r, 250));
+      await onSubmit();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Could not submit the entry. Please try again.');
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
   if (!battle.myGroup) return null;
 
@@ -178,8 +193,8 @@ function DrawingStage({ battle, getStrokes, onSubmit }: { battle: CompetitionDet
           <>
             <div style={{ fontSize: 13, fontWeight: 800 }}><Sparkles size={14} style={{ color: 'var(--kid-yellow)', verticalAlign: -2 }} /> Drawing window open</div>
             <TimeBar end={battle.drawEndTime} windowMs={DRAW_WINDOW_MS} color="var(--accent)" />
-            <button className="gbtn" style={{ width: '100%', justifyContent: 'center', marginTop: 10, background: 'var(--kid-green)', color: '#fff', fontWeight: 800 }} onClick={onSubmit}>
-              <Send size={14} /> Submit my group's entry
+            <button className="gbtn" style={{ width: '100%', justifyContent: 'center', marginTop: 10, background: 'var(--kid-green)', color: '#fff', fontWeight: 800 }} onClick={doSubmit} disabled={submitting}>
+              <Send size={14} /> {submitting ? 'Submitting…' : "Submit my group's entry"}
             </button>
           </>
         )}
@@ -399,7 +414,16 @@ export default function CompetitionsModal({ onClose, sourceGroup, getStrokes, ca
     if (!srcId || !tgtId) return setError('Pick your group and a challenger to start.');
     setBusy(true);
     try {
-      const d = await api.post('/api/competitions', { sourceGroupId: srcId, targetGroupId: tgtId, prompt });
+      const body = { sourceGroupId: srcId, targetGroupId: tgtId, prompt };
+      let d;
+      try {
+        d = await api.post('/api/competitions', body);
+      } catch (first) {
+        // Cold starts can 5xx once; a single retry rides over it. Only retry
+        // real server-side failures, never 4xx validation errors.
+        if (!/(5\d\d|temporarily unavailable)/.test(first instanceof Error ? first.message : '')) throw first;
+        d = await api.post('/api/competitions', body);
+      }
       setTab('live');
       setOpenId(d.id);
       await load();

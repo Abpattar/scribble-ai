@@ -1,4 +1,4 @@
-import { requireUser } from '../src/lib/serverAuth.js';
+import { requireUserId } from '../src/lib/serverAuth.js';
 import { groupCollection, friendshipCollection, profileCollection, competitionCollection } from '../src/lib/mongodb.js';
 import { ObjectId } from 'mongodb';
 
@@ -9,43 +9,49 @@ async function membersOf(ids) {
   return map;
 }
 
-async function withMembers(group, ids) {
-  const map = await membersOf(ids);
-  return {
-    ...group,
-    id: String(group._id),
-    _id: undefined,
-    members: ids.map((id) => map[id] || { userId: id }),
-  };
+// Auth identity + profile/suspension check, loaded in the same wave as the
+// endpoint's own first query (2 parallel Mongo round-trips total per handler).
+async function profileOf(userId) {
+  return (await profileCollection()).findOne({ _id: userId });
 }
 
 export default async function handler(request, response) {
-  const user = await requireUser(request);
-  if (!user) return response.status(401).json({ error: 'Unauthorized: invalid session.' });
+  try {
+    const userId = await requireUserId(request);
+    if (!userId) return response.status(401).json({ error: 'Unauthorized: invalid session.' });
 
-  const isGroupRoute = request.query?.route === 'group' || Boolean(request.query?.groupId);
-  if (isGroupRoute) return groupAction(request, response);
+    const isGroupRoute = request.query?.route === 'group' || Boolean(request.query?.groupId);
+    if (isGroupRoute) return groupAction(request, response, userId);
 
-  if (request.method === 'GET') return getGroups(request, response, user);
-  if (request.method === 'POST') return createGroup(request, response, user);
-  return response.status(405).json({ error: 'Method not allowed' });
+    if (request.method === 'GET') return getGroups(request, response, userId);
+    if (request.method === 'POST') return createGroup(request, response, userId);
+    return response.status(405).json({ error: 'Method not allowed' });
+  } catch (error) {
+    console.error('groups handler failed:', error?.message || error);
+    return response.status(503).json({
+      error: 'Groups are temporarily unavailable. Give it a moment and try again.',
+    });
+  }
 }
 
-async function groupAction(request, response) {
-  const user = await requireUser(request);
-  if (!user) return response.status(401).json({ error: 'Unauthorized: invalid session.' });
-
+async function groupAction(request, response, userId) {
   const groupId = String(request.query?.groupId || '');
+  let profile;
   let group;
   try {
-    group = await (await groupCollection()).findOne({ _id: new ObjectId(groupId) });
+    [profile, group] = await Promise.all([
+      profileOf(userId),
+      (await groupCollection()).findOne({ _id: new ObjectId(groupId) }),
+    ]);
   } catch {
+    profile = null;
     group = null;
   }
-  if (!group || !group.memberIds?.includes(user.userId)) {
+  if (profile?.suspended) return response.status(401).json({ error: 'Unauthorized: invalid session.' });
+  if (!group || !group.memberIds?.includes(userId)) {
     return response.status(404).json({ error: 'Group not found.' });
   }
-  const isAdmin = group.adminId === user.userId;
+  const isAdmin = group.adminId === userId;
 
   if (request.method === 'GET') {
     const map = await membersOf(group.memberIds);
@@ -81,8 +87,8 @@ async function groupAction(request, response) {
     const friendship = await (await friendshipCollection()).findOne({
       status: 'accepted',
       $or: [
-        { userA: user.userId, userB: memberId },
-        { userA: memberId, userB: user.userId },
+        { userA: userId, userB: memberId },
+        { userA: memberId, userB: userId },
       ],
     });
     if (!friendship) return response.status(403).json({ error: 'You can only invite friends.' });
@@ -93,7 +99,7 @@ async function groupAction(request, response) {
   if (action === 'remove') {
     if (!isAdmin) return response.status(403).json({ error: 'Only the group creator can remove members.' });
     const memberId = String(request.body.memberId || '');
-    if (memberId === user.userId) return response.status(400).json({ error: 'Use "leave" to exit the group.' });
+    if (memberId === userId) return response.status(400).json({ error: 'Use "leave" to exit the group.' });
     await col.updateOne({ _id: group._id }, { $pull: { memberIds: memberId } });
     return response.status(200).json({ ok: true });
   }
@@ -104,10 +110,10 @@ async function groupAction(request, response) {
       await col.deleteOne({ _id: group._id });
       return response.status(200).json({ ok: true, deleted: true });
     }
-    await col.updateOne({ _id: group._id }, { $pull: { memberIds: user.userId } });
+    await col.updateOne({ _id: group._id }, { $pull: { memberIds: userId } });
     if (isAdmin) {
       const next = await col.findOne({ _id: group._id });
-      if (next) await col.updateOne({ _id: group._id }, { $set: { adminId: next.memberIds[0] || user.userId } });
+      if (next) await col.updateOne({ _id: group._id }, { $set: { adminId: next.memberIds[0] || userId } });
     }
     return response.status(200).json({ ok: true });
   }
@@ -122,46 +128,60 @@ async function groupAction(request, response) {
   return response.status(400).json({ error: 'Unknown action.' });
 }
 
-async function getGroups(request, response, user) {
-  const col = await groupCollection();
-  const rows = await col.find({ memberIds: user.userId }).sort({ createdAt: -1 }).toArray();
-  const groups = await Promise.all(rows.map((g) => withMembers(g, g.memberIds)));
+async function getGroups(request, response, userId) {
+  // Wave 1: profile + this user's groups + accepted friendships, in parallel.
+  const [profile, rows, friendships] = await Promise.all([
+    profileOf(userId),
+    (await groupCollection()).find({ memberIds: userId }).sort({ createdAt: -1 }).toArray(),
+    (await friendshipCollection())
+      .find({ status: 'accepted', $or: [{ userA: userId }, { userB: userId }] })
+      .toArray(),
+  ]);
+  if (profile?.suspended) return response.status(401).json({ error: 'Unauthorized: invalid session.' });
 
-  const friendships = await (await friendshipCollection())
-    .find({
-      status: 'accepted',
-      $or: [{ userA: user.userId }, { userB: user.userId }],
-    })
-    .toArray();
-  const friendIds = friendships.map((f) => (f.userA === user.userId ? f.userB : f.userA));
-  const friends = await membersOf(friendIds);
+  const friendIds = friendships.map((f) => (f.userA === userId ? f.userB : f.userA));
 
-  return response.status(200).json({ groups, friends: friendIds.map((id) => friends[id] || { userId: id }) });
+  // Wave 2: one query resolves every referenced profile (group members +
+  // friends) instead of one query per group.
+  const memberIds = new Set();
+  for (const g of rows) for (const m of g.memberIds || []) memberIds.add(m);
+  for (const f of friendIds) memberIds.add(f);
+  const map = memberIds.size ? await membersOf(Array.from(memberIds)) : {};
+
+  const groups = rows.map((g) => ({
+    ...g,
+    id: String(g._id),
+    _id: undefined,
+    members: (g.memberIds || []).map((id) => map[id] || { userId: id }),
+  }));
+  return response.status(200).json({ groups, friends: friendIds.map((id) => map[id] || { userId: id }) });
 }
 
-async function createGroup(request, response, user) {
+async function createGroup(request, response, userId) {
   const body = request.body || {};
   const name = String(body.name || '').trim().slice(0, 40);
   if (!name) return response.status(400).json({ error: 'Group needs a name.' });
   const emoji = String(body.emoji || '🎨');
   const memberIds = Array.isArray(body.memberIds)
-    ? [...new Set(body.memberIds.map((m) => String(m)).filter((m) => m !== user.userId))].slice(0, 8)
+    ? [...new Set(body.memberIds.map((m) => String(m)).filter((m) => m !== userId))].slice(0, 8)
     : [];
 
-  const friendships = await (await friendshipCollection())
-    .find({
-      status: 'accepted',
-      $or: [{ userA: user.userId }, { userB: user.userId }],
-    })
-    .toArray();
-  const friendIds = new Set(friendships.map((f) => (f.userA === user.userId ? f.userB : f.userA)));
+  const [profile, friendships] = await Promise.all([
+    profileOf(userId),
+    (await friendshipCollection())
+      .find({ status: 'accepted', $or: [{ userA: userId }, { userB: userId }] })
+      .toArray(),
+  ]);
+  if (profile?.suspended) return response.status(401).json({ error: 'Unauthorized: invalid session.' });
+
+  const friendIds = new Set(friendships.map((f) => (f.userA === userId ? f.userB : f.userA)));
   const cleanMembers = memberIds.filter((m) => friendIds.has(m));
-  const allMembers = [user.userId, ...cleanMembers];
+  const allMembers = [userId, ...cleanMembers];
 
   const result = await (await groupCollection()).insertOne({
     name,
     emoji,
-    adminId: user.userId,
+    adminId: userId,
     memberIds: allMembers,
     wins: 0,
     played: 0,

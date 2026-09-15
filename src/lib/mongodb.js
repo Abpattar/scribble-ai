@@ -16,11 +16,11 @@ let clientPromisePromise = null;
 function createClient() {
   const client = new MongoClient(uri, {
     appName: 'scribble-air-draw',
-    // Generous enough to survive a Vercel Hobby cold start (serverless
-    // functions have an ~10s wall limit, so 8s leaves room for the request
-    // itself after the warm-up connect+find below).
-    connectTimeoutMS: 8000,
-    serverSelectionTimeoutMS: 8000,
+    // Short enough to fail fast (then retry below or 503) rather than hang
+    // near Vercel Hobby's ~10s serverless cap; leaving room for the request
+    // itself after the warm-up connect.
+    connectTimeoutMS: 5000,
+    serverSelectionTimeoutMS: 5000,
     retryReads: true,
     retryWrites: true,
   });

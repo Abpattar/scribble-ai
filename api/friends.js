@@ -1,4 +1,4 @@
-import { requireUser } from '../src/lib/serverAuth.js';
+import { requireUserId } from '../src/lib/serverAuth.js';
 import { friendshipCollection, profileCollection } from '../src/lib/mongodb.js';
 
 const pair = (a, b) => (a < b ? [a, b] : [b, a]);
@@ -13,47 +13,66 @@ async function resolveUsers(ids) {
   return map;
 }
 
-export default async function handler(request, response) {
-  const isRequestsRoute = request.query?.route === 'requests' || (request.url || '').includes('/requests');
-  if (isRequestsRoute && request.method === 'GET') return pendingRequests(request, response);
-  const user = await requireUser(request);
-  if (!user) return response.status(401).json({ error: 'Unauthorized: invalid session.' });
+async function profileOf(userId) {
+  return (await profileCollection()).findOne({ _id: userId });
+}
 
-  if (request.method === 'GET') return getFriends(request, response, user);
-  if (request.method === 'POST') return postFriends(request, response, user);
-  return response.status(405).json({ error: 'Method not allowed' });
+export default async function handler(request, response) {
+  try {
+    const isRequestsRoute = request.query?.route === 'requests' || (request.url || '').includes('/requests');
+    if (isRequestsRoute && request.method === 'GET') return pendingRequests(request, response);
+
+    const userId = await requireUserId(request);
+    if (!userId) return response.status(401).json({ error: 'Unauthorized: invalid session.' });
+
+    if (request.method === 'GET') return getFriends(request, response, userId);
+    if (request.method === 'POST') return postFriends(request, response, userId);
+    return response.status(405).json({ error: 'Method not allowed' });
+  } catch (error) {
+    console.error('friends handler failed:', error?.message || error);
+    return response.status(503).json({
+      error: 'Friends are temporarily unavailable. Give it a moment and try again.',
+    });
+  }
 }
 
 async function pendingRequests(request, response) {
-  const user = await requireUser(request);
-  if (!user) {
+  const userId = await requireUserId(request);
+  if (!userId) {
     return response.status(401).json({ error: 'Unauthorized: invalid session.' });
   }
   try {
-    const count = await (await friendshipCollection()).countDocuments({
-      status: 'pending',
-      actionUserId: { $ne: user.userId },
-      $or: [{ userA: user.userId }, { userB: user.userId }],
-    });
+    const [profile, count] = await Promise.all([
+      profileOf(userId),
+      (await friendshipCollection()).countDocuments({
+        status: 'pending',
+        actionUserId: { $ne: userId },
+        $or: [{ userA: userId }, { userB: userId }],
+      }),
+    ]);
+    if (profile?.suspended) return response.status(401).json({ error: 'Unauthorized: invalid session.' });
     return response.status(200).json({ count });
   } catch (error) {
-    return response.status(500).json({ error: error?.message || 'Could not load friend requests.' });
+    return response.status(503).json({ error: error?.message || 'Could not load friend requests.' });
   }
 }
 
-async function getFriends(request, response, user) {
-  const col = await friendshipCollection();
-  const rows = await col
-    .find({ $or: [{ userA: user.userId }, { userB: user.userId }] })
-    .toArray();
+async function getFriends(request, response, userId) {
+  const [profile, rows] = await Promise.all([
+    profileOf(userId),
+    (await friendshipCollection())
+      .find({ $or: [{ userA: userId }, { userB: userId }] })
+      .toArray(),
+  ]);
+  if (profile?.suspended) return response.status(401).json({ error: 'Unauthorized: invalid session.' });
 
   const friends = [];
   const outgoing = [];
   const incoming = [];
   for (const r of rows) {
-    const other = r.userA === user.userId ? r.userB : r.userA;
+    const other = r.userA === userId ? r.userB : r.userA;
     if (r.status === 'accepted') friends.push(other);
-    else if (r.actionUserId === user.userId) outgoing.push(other);
+    else if (r.actionUserId === userId) outgoing.push(other);
     else incoming.push(other);
   }
 
@@ -68,7 +87,7 @@ async function getFriends(request, response, user) {
   });
 }
 
-async function postFriends(request, response, user) {
+async function postFriends(request, response, userId) {
   const col = await friendshipCollection();
   const body = request.body || {};
   const action = body.action || 'add';
@@ -87,7 +106,7 @@ async function postFriends(request, response, user) {
       })
       .limit(10)
       .toArray();
-    const matched = target.filter((t) => t._id !== user.userId);
+    const matched = target.filter((t) => t._id !== userId);
     if (!matched.length) {
       return response.status(404).json({ error: 'No Scribble Air user found with that email or nickname.' });
     }
@@ -98,27 +117,27 @@ async function postFriends(request, response, user) {
       (t) => (t.email || '').toLowerCase() === lookup || (t.nickname || '').toLowerCase() === lookup
     );
     const targetUser = exact || matched[0];
-    const [a, b] = pair(user.userId, targetUser._id);
+    const [a, b] = pair(userId, targetUser._id);
     const existing = await col.findOne({ userA: a, userB: b });
     if (existing) {
       if (existing.status === 'accepted') return response.status(200).json({ ok: true, already: true });
-      if (existing.actionUserId === user.userId) return response.status(200).json({ ok: true, already: true });
+      if (existing.actionUserId === userId) return response.status(200).json({ ok: true, already: true });
       // They already sent us a request → this accepts it.
       await col.updateOne({ _id: existing._id }, { $set: { status: 'accepted', respondedAt: Date.now() } });
       return response.status(200).json({ ok: true, accepted: true });
     }
-    await col.insertOne({ userA: a, userB: b, status: 'pending', actionUserId: user.userId, createdAt: Date.now() });
+    await col.insertOne({ userA: a, userB: b, status: 'pending', actionUserId: userId, createdAt: Date.now() });
     return response.status(200).json({ ok: true });
   }
 
   const otherId = String(body.userId || '');
-  const [a, b] = pair(user.userId, otherId);
+  const [a, b] = pair(userId, otherId);
   const existing = await col.findOne({ userA: a, userB: b });
   if (!existing) return response.status(404).json({ error: 'Friendship not found.' });
 
   if (action === 'accept') {
     if (existing.status === 'accepted') return response.status(200).json({ ok: true });
-    if (existing.actionUserId === user.userId) return response.status(400).json({ error: 'That is your own outgoing request.' });
+    if (existing.actionUserId === userId) return response.status(400).json({ error: 'That is your own outgoing request.' });
     await col.updateOne({ _id: existing._id }, { $set: { status: 'accepted', respondedAt: Date.now() } });
     return response.status(200).json({ ok: true });
   }
