@@ -23,7 +23,12 @@ export function useApi() {
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+    if (!res.ok) {
+      if (res.status === 401) {
+        throw new Error('Your sign-in has expired. Reload the page and sign in again.');
+      }
+      throw new Error(data.error || `Request failed (${res.status})`);
+    }
     return data;
   }, []);
 
