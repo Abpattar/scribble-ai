@@ -348,17 +348,30 @@ export default function CompetitionsModal({ onClose, sourceGroup, getStrokes, ca
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const failCountRef = useRef(0);
 
   const load = useCallback(async () => {
     try {
       const d = await api.get('/api/competitions');
       setActive(d.active || []);
       setRecent(d.recent || []);
-      const g = await api.get('/api/groups');
-      setGroups(g.groups || []);
+      failCountRef.current = 0;
       setError('');
+      try {
+        const g = await api.get('/api/groups');
+        setGroups(g.groups || []);
+      } catch {
+        // Groups are only needed for the "New Battle" form; a hiccup here
+        // must not flash an error over the fights list.
+      }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load battles.');
+      // One transient failure (cold start, Atlas blip) is fine — the user
+      // just sees the last good list. Only after repeated failures do we
+      // surface the banner with a Retry action.
+      failCountRef.current += 1;
+      if (failCountRef.current >= 2) {
+        setError(e instanceof Error ? e.message : 'Failed to load battles.');
+      }
     } finally {
       setLoaded(true);
     }

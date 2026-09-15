@@ -1,5 +1,5 @@
-import { requireUser } from '../src/lib/serverAuth.js';
-import { competitionCollection, groupCollection } from '../src/lib/mongodb.js';
+import { requireUserId } from '../src/lib/serverAuth.js';
+import { competitionCollection, groupCollection, profileCollection } from '../src/lib/mongodb.js';
 import { ObjectId } from 'mongodb';
 import { DRAW_WINDOW_MS, VOTE_WINDOW_MS, BATTLE_PROMPTS } from './lib/battle.js';
 
@@ -71,16 +71,30 @@ async function memberKey(comp, userId) {
   return myGroupOf(comp, gaDoc, gbDoc, userId);
 }
 
+// Authenticated reads run the (cheap) profile lookup in parallel with the
+// real work below it, keeping the whole handler to ~2 Mongo round-trips
+// instead of ~3-4 sequential ones. A suspended user is still rejected.
+async function profileOf(userId) {
+  return (await profileCollection()).findOne({ _id: userId });
+}
+
 export default async function handler(request, response) {
-  const user = await requireUser(request);
-  if (!user) return response.status(401).json({ error: 'Unauthorized: invalid session.' });
+  try {
+    const userId = await requireUserId(request);
+    if (!userId) return response.status(401).json({ error: 'Unauthorized: invalid session.' });
 
-  const isCompetitionRoute = request.query?.route === 'competition' || Boolean(request.query?.competitionId);
-  if (isCompetitionRoute) return competitionAction(request, response);
+    const isCompetitionRoute = request.query?.route === 'competition' || Boolean(request.query?.competitionId);
+    if (isCompetitionRoute) return competitionAction(request, response, userId);
 
-  if (request.method === 'GET') return getCompetitions(request, response, user);
-  if (request.method === 'POST') return createCompetition(request, response, user);
-  return response.status(405).json({ error: 'Method not allowed' });
+    if (request.method === 'GET') return getCompetitions(request, response, userId);
+    if (request.method === 'POST') return createCompetition(request, response, userId);
+    return response.status(405).json({ error: 'Method not allowed' });
+  } catch (error) {
+    console.error('competitions handler failed:', error?.message || error);
+    return response.status(503).json({
+      error: 'Battles are temporarily unavailable. Give it a moment and try again.',
+    });
+  }
 }
 
 // Lazily finalises a competition once the vote window passes: tallies votes,
@@ -136,42 +150,44 @@ async function getOne(comp, user, response) {
   });
 }
 
-async function competitionAction(request, response) {
-  const user = await requireUser(request);
-  if (!user) return response.status(401).json({ error: 'Unauthorized: invalid session.' });
-
+async function competitionAction(request, response, userId) {
   const id = String(request.query?.competitionId || '');
-  let comp = await (await competitionCollection()).findOne({ _id: safeId(id) });
+  const [profile, comp] = await Promise.all([
+    profileOf(userId),
+    (await competitionCollection()).findOne({ _id: safeId(id) }),
+  ]);
+  if (profile?.suspended) return response.status(401).json({ error: 'Unauthorized: invalid session.' });
   if (!comp) return response.status(404).json({ error: 'Competition not found.' });
+  const user = { userId };
 
   if (request.method === 'GET') {
-    comp = await settle(comp);
-    return getOne(comp, user, response);
+    const settled = await settle(comp);
+    return getOne(settled, user, response);
   }
   if (request.method !== 'POST') return response.status(405).json({ error: 'Method not allowed' });
 
-  comp = await settle(comp);
+  const settled = await settle(comp);
   const col = await competitionCollection();
   const action = request.body?.action || '';
-  const myKey = await memberKey(comp, user.userId);
+  const myKey = await memberKey(settled, user.userId);
 
   if (action === 'sync' || action === 'submit') {
     if (!myKey) return response.status(403).json({ error: 'You are not part of this battle.' });
-    if (statusOf(comp) !== 'drawing') return response.status(400).json({ error: 'The drawing window is over.' });
+    if (statusOf(settled) !== 'drawing') return response.status(400).json({ error: 'The drawing window is over.' });
     const strokes = Array.isArray(request.body.strokes) ? request.body.strokes : undefined;
     const entry = { updatedAt: Date.now() };
     if (strokes) entry.strokes = strokes;
     if (action === 'submit') entry.submittedAt = Date.now();
-    await col.updateOne({ _id: comp._id }, { $set: { [`entries.${myKey}`]: entry } });
+    await col.updateOne({ _id: settled._id }, { $set: { [`entries.${myKey}`]: entry } });
     return response.status(200).json({ ok: true });
   }
 
   if (action === 'vote') {
-    if (statusOf(comp) !== 'voting') return response.status(400).json({ error: 'Voting is not open yet.' });
+    if (statusOf(settled) !== 'voting') return response.status(400).json({ error: 'Voting is not open yet.' });
     const target = String(request.body.groupId || '');
-    if (target !== String(comp.groupA) && target !== String(comp.groupB)) return response.status(400).json({ error: 'Invalid vote target.' });
-    if (comp.votes?.[user.userId]) return response.status(400).json({ error: 'You already voted.' });
-    await col.updateOne({ _id: comp._id }, { $set: { [`votes.${user.userId}`]: target } });
+    if (target !== String(settled.groupA) && target !== String(settled.groupB)) return response.status(400).json({ error: 'Invalid vote target.' });
+    if (settled.votes?.[user.userId]) return response.status(400).json({ error: 'You already voted.' });
+    await col.updateOne({ _id: settled._id }, { $set: { [`votes.${user.userId}`]: target } });
     return response.status(200).json({ ok: true, voted: target });
   }
 
@@ -183,9 +199,13 @@ async function competitionAction(request, response) {
 // The previous per-battle findOne loop was ~4 round-trips × up to 30 battles
 // (sequential along the way) — enough to exceed Vercel Hobby's ~10s cap and
 // surface as a flaky 500 on cold starts.
-async function getCompetitions(request, response, user) {
-  const col = await competitionCollection();
-  const rows = await col.find({}).sort({ createdAt: -1 }).limit(40).toArray();
+async function getCompetitions(request, response, userId) {
+  // Wave 1: verify identity (basic read) + load the battles in parallel.
+  const [profile, rows] = await Promise.all([
+    profileOf(userId),
+    (await competitionCollection()).find({}).sort({ createdAt: -1 }).limit(40).toArray(),
+  ]);
+  if (profile?.suspended) return response.status(401).json({ error: 'Unauthorized: invalid session.' });
   if (!rows.length) {
     return response.status(200).json({ active: [], recent: [] });
   }
@@ -196,10 +216,11 @@ async function getCompetitions(request, response, user) {
     refIds.add(c.groupB);
   }
 
+  // Wave 2: one query for every referenced group + one for the user's groups.
   const groupCol = await groupCollection();
   const [groupDocs, myGroups] = await Promise.all([
     groupCol.find({ _id: { $in: batchIds(refIds) } }).toArray(),
-    groupCol.find({ memberIds: user.userId }).project({ _id: 1 }).toArray(),
+    groupCol.find({ memberIds: userId }).project({ _id: 1 }).toArray(),
   ]);
   const groupMap = new Map(groupDocs.map((g) => [String(g._id), g]));
   const myGroupIds = new Set(myGroups.map((g) => String(g._id)));
@@ -231,7 +252,7 @@ async function getCompetitions(request, response, user) {
           ? { id: c.winner, name: String(c.winner) === String(c.groupA) ? ga.name : gb.name, emoji: String(c.winner) === String(c.groupA) ? ga.emoji : gb.emoji }
           : null,
       myGroup: myGroupIds.has(String(c.groupA)) ? c.groupA : myGroupIds.has(String(c.groupB)) ? c.groupB : null,
-      hasVoted: Boolean(c.votes?.[user.userId]),
+      hasVoted: Boolean(c.votes?.[userId]),
       votes: closed || st === 'voting' ? { A: aCount, B: bCount } : null,
     });
   }
@@ -241,20 +262,22 @@ async function getCompetitions(request, response, user) {
   return response.status(200).json({ active, recent });
 }
 
-async function createCompetition(request, response, user) {
+async function createCompetition(request, response, userId) {
   const body = request.body || {};
   const source = String(body.sourceGroupId || '');
   const target = String(body.targetGroupId || '');
   if (!source || !target) return response.status(400).json({ error: 'Pick two groups to battle.' });
   if (source === target) return response.status(400).json({ error: 'A group cannot battle itself.' });
 
-  const docs = await (await groupCollection())
-    .find({ _id: { $in: batchIds([source, target]) } })
-    .toArray();
+  const [profile, docs] = await Promise.all([
+    profileOf(userId),
+    (await groupCollection()).find({ _id: { $in: batchIds([source, target]) } }).toArray(),
+  ]);
+  if (profile?.suspended) return response.status(401).json({ error: 'Unauthorized: invalid session.' });
   const sdoc = docs.find((g) => String(g._id) === String(source)) || null;
   const tdoc = docs.find((g) => String(g._id) === String(target)) || null;
 
-  if (!sdoc?.memberIds?.includes(user.userId)) {
+  if (!sdoc?.memberIds?.includes(userId)) {
     return response.status(403).json({ error: 'You must be a member of the challenging group.' });
   }
   if (!tdoc) return response.status(404).json({ error: 'Target group not found.' });
@@ -265,7 +288,7 @@ async function createCompetition(request, response, user) {
     prompt,
     groupA: source,
     groupB: target,
-    createdBy: user.userId,
+    createdBy: userId,
     createdAt: now,
     drawEndTime: now + DRAW_WINDOW_MS,
     voteEndTime: now + DRAW_WINDOW_MS + VOTE_WINDOW_MS,

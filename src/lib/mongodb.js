@@ -21,8 +21,31 @@ function createClient() {
     // itself after the warm-up connect+find below).
     connectTimeoutMS: 8000,
     serverSelectionTimeoutMS: 8000,
+    retryReads: true,
+    retryWrites: true,
   });
   return client.connect();
+}
+
+// Atlas free/shared tiers occasionally drop a TLS handshake mid-flight.
+// A cheap retry with a small backoff rides over those blips instead of
+// surfacing a raw 500 to the caller.
+const RETRY_ATTEMPTS = 3;
+const RETRY_DELAY_MS = 500;
+
+async function connectWithRetry() {
+  let lastErr;
+  for (let i = 0; i < RETRY_ATTEMPTS; i++) {
+    try {
+      return await createClient();
+    } catch (error) {
+      lastErr = error;
+      if (i < RETRY_ATTEMPTS - 1) {
+        await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS * (i + 1)));
+      }
+    }
+  }
+  throw lastErr;
 }
 
 export async function getDb() {
@@ -31,10 +54,10 @@ export async function getDb() {
   }
   if (!clientPromisePromise) {
     if (process.env.NODE_ENV !== 'production') {
-      clientPromisePromise = globalThis._mongoClientPromise || createClient();
+      clientPromisePromise = globalThis._mongoClientPromise || connectWithRetry();
       globalThis._mongoClientPromise = clientPromisePromise;
     } else {
-      clientPromisePromise = createClient();
+      clientPromisePromise = connectWithRetry();
     }
   }
   const client = await clientPromisePromise;
