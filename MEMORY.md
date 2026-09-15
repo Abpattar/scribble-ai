@@ -102,6 +102,25 @@ ids then `POST /v10/projects/{id}/env?upsert=true`.
 
 ## 6. What was fixed recently (session log, newest last)
 
+- **Battles 500 / slow (real cause):** Vercel logs showed `MongoNetworkError …
+  tlsv1 alert internal error` + Atlas `SystemOverloadedError` on `/api/friends`,
+  `/api/groups`, `/api/competitions`. Old `getCompetitions` also ran ~4
+  sequential Mongo round-trips × up to 30 battles → broke Vercel Hobby's ~10s
+  function cap → flaky 500s. Fixes:
+  - `api/competitions.js` rewritten: 2 **wave-parallel** scheme — wave 1 runs
+    the profile/suspension lookup + battle read together, wave 2 runs the
+    group `$in` + user-membership finds together. Whole handler ≈2 round-trips.
+    Never emits a raw 500: top-level try/catch → `503 { error: ... }`.
+  - `src/lib/mongodb.js`: `retryReads/retryWrites` + `connectWithRetry()`
+    (3 attempts, 500ms backoff) to ride over Atlas free-tier TLS handshake
+    drops instead of 500ing.
+  - `CompetitionsModal.tsx`: error banner only after ≥2 consecutive failures;
+    keeps last-good list on screen; groups-load is silent (optional).
+  - `src/hooks/useApi.ts`: a 401 now surfaces "Your sign-in has expired…"
+    instead of the raw "Unauthorized: invalid session."
+  - Live round-trips after fix: warm ~2.1-3.4s, cold ~5-7s (Atlas shared-tier
+    query latency is the floor; verify Hotspot: real token from
+    `clerk.sessions.getToken` → `curl /api/competitions`).
 - **Camera wake freeze:** `resumeCamera()` used to call `start()` on the same
   MediaPipe `Camera` after `stop()` → stale loop sat on `video.currentTime`
   and never fired frames, so tracking stayed dead while the overlay was gone.
@@ -129,12 +148,14 @@ ids then `POST /v10/projects/{id}/env?upsert=true`.
 
 ## 7. Commits / deployment state
 
-- Latest commits: `617e09e` (client entitlement + free templates + backdrop
-  close), `c87c107` (camera wake fix + empty replay/record hints), `12cba2c`
-  (one-time Razorpay order flow + Clerk v5 + delete leaked test files).
-- Local uncommitted (if not yet pushed when you open this): cancel-subscription
-  rewrite + `SubscriptionModal` confirm text + branding renames (Scribble Air
-  Draw) + README + this MEMORY file.
+- Current: `db4f163` = battle parallel-read + mongo retry + friendly 401.
+  Alias `scribble-ai.vercel.app` → newest deploy `scribble-6egxwobtt-…`.
+- Battle work: `60b886f` (batched queries + professional battle UI),
+  `d5603ea` (parallel reads, mongo retry, quieter client errors).
+- Older: `5ee1d50` (friends/groups/battles robustness), `617e09e` (client
+  entitlement + free templates + backdrop close), `c87c107` (camera wake fix
+  + empty replay/record hints), `12cba2c` (one-time Razorpay order flow +
+  Clerk v5 + delete leaked test files).
 - Live: `https://scribble-ai.vercel.app` (alias pinned manually after every
   deploy; per-deploy URLs look like
   `scribble-xxxxxxxx-adityas-projects-cf1e02fd.vercel.app`). Vercel token in
@@ -168,7 +189,10 @@ vercel alias set <deployment-url> scribble-ai.vercel.app
 - **`pkill -f '<pattern>'` can kill the shell running the command** if the
   pattern appears in that same command line — prefer `kill <pid>`.
 - **Vercel alias is manual** — re-pin after every deploy or the old bundle
-  stays live (stale client code makes features look broken).
+  stays live (stale client code makes features look broken). GitHub push also
+  triggers a CI Production deploy, so after `vercel deploy --prod` check
+  `vercel ls` and pin the **newest** URL (the CLI auto-aliases the throwaway
+  `scribble-ai-one.vercel.app`; pin `scribble-ai.vercel.app` explicitly).
 - **12-function Hobby limit** — already solved by consolidation; don't add
   separate top-level `api/*.js` files without folding them into a dispatcher.
 - **Never rename the Mongo database** `neonair`; never commit `*.env` (it's
