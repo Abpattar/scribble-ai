@@ -102,6 +102,21 @@ ids then `POST /v10/projects/{id}/env?upsert=true`.
 
 ## 6. What was fixed recently (session log, newest last)
 
+- **Submit button did nothing + create-battle 500s:**
+  - `CompetitionsModal` Submit was wired to `onSubmit={load}` — a refresh, not
+    an upload. Now `DrawingStage.doSubmit()` POSTs `{ action: 'submit',
+    strokes }` to `/api/competitions/:id`, stops auto-sync after submit, and
+    re-fetches. Verified live (create→submit→detail shows `submittedAt`).
+  - Intermittent `FUNCTION_INVOCATION_FAILED` (500) was Vercel Hobby's ~10s
+    cap being blown by cold starts on the 3–4-sequential-wave handlers:
+    `/api/groups` and `/api/friends` are now **2-wave parallel** like
+    `/api/competitions` (profile/suspension read runs in the same wave as the
+    first data query; one `$in` profiles query resolves all members+friends).
+    Mongo timeouts dropped 8000→5000ms so ops fail fast (503) instead of
+    crashing at the cap; `createBattle` in the modal auto-retries once on
+    5xx/cold-start ("temporarily unavailable"), never on 4xx.
+  - Live after-fix profile (Diablo token): groups ~4.6-6.6s, friends
+    ~2.6-4.5s, competitions ~2.6-4.6s cold; all 200, no crashes.
 - **Battles 500 / slow (real cause):** Vercel logs showed `MongoNetworkError …
   tlsv1 alert internal error` + Atlas `SystemOverloadedError` on `/api/friends`,
   `/api/groups`, `/api/competitions`. Old `getCompetitions` also ran ~4
@@ -148,8 +163,8 @@ ids then `POST /v10/projects/{id}/env?upsert=true`.
 
 ## 7. Commits / deployment state
 
-- Current: `db4f163` = battle parallel-read + mongo retry + friendly 401.
-  Alias `scribble-ai.vercel.app` → newest deploy `scribble-6egxwobtt-…`.
+- Current: `6b2acbb` = real submit + 2-wave groups/friends + fail-fast Mongo.
+  Alias `scribble-ai.vercel.app` → newest deploy `scribble-ciyoxq1a8-…`.
 - Battle work: `60b886f` (batched queries + professional battle UI),
   `d5603ea` (parallel reads, mongo retry, quieter client errors).
 - Older: `5ee1d50` (friends/groups/battles robustness), `617e09e` (client
