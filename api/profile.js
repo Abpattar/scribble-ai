@@ -41,9 +41,30 @@ async function getProfile(request, response) {
 
   try {
     const col = await profileCollection();
-    const doc = await col.findOne({ _id: userId });
+    let doc = await col.findOne({ _id: userId });
     if (!doc) {
-      return response.status(200).json({ profile: null });
+      // First time this Clerk user loads the app: provision a default profile
+      // document so they are immediately searchable in Friends and can use
+      // groups/battles. The nickname screen and drawing saves enrich it.
+      doc = {
+        _id: userId,
+        nickname: '',
+        bio: '',
+        email: '',
+        avatar: '',
+        favorites: {},
+        drawings: {},
+        history: {},
+        subscribed: false,
+        subscribedUntil: null,
+        plan: null,
+        payments: [],
+        role: 'user',
+        suspended: false,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+      await col.insertOne(doc);
     }
     // Keep silently back-compatible: any matching SUPERADMIN_EMAIL gets the
     // superadmin role on sight (bootstrap for the first admin).

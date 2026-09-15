@@ -24,14 +24,49 @@ export async function requireUserId(request) {
 }
 
 // Authenticates the request and resolves the caller's role from their profile
-// document. Suspended users are treated as unauthenticated. Returns
-// { userId, role, profile } or null.
+// document. Suspended users are treated as unauthenticated.
+//
+// A missing profile document is NOT a 401: every authenticated Clerk user can
+// use friends/groups/battles on their very first visit, before their profile
+// has ever been written. /api/profile provisions the real document on first
+// load, so this virtual default is only a transient fallback. Suspension is
+// stored on the existing document and is still honoured; a deleted document
+// is never re-created here, so it cannot silently re-enable a removed user.
+// Returns { userId, role, profile } or null.
 export async function requireUser(request) {
   const userId = await requireUserId(request);
   if (!userId) return null;
-  const profile = await (await profileCollection()).findOne({ _id: userId });
-  if (!profile || profile.suspended) return null;
-  return { userId, profile, role: profile.role || 'user' };
+
+  let profile = null;
+  try {
+    profile = await (await profileCollection()).findOne({ _id: userId });
+  } catch (error) {
+    console.error('Profile lookup failed:', error?.message || error);
+  }
+
+  if (profile) {
+    if (profile.suspended) return null;
+    return { userId, profile, role: profile.role || 'user' };
+  }
+
+  return {
+    userId,
+    role: 'user',
+    profile: {
+      _id: userId,
+      nickname: '',
+      email: '',
+      bio: '',
+      avatar: '',
+      subscribed: false,
+      subscribedUntil: null,
+      plan: null,
+      payments: [],
+      role: 'user',
+      features: undefined,
+      galleryLimit: 3,
+    },
+  };
 }
 
 // Like requireUser but enforces the role is one of `roles` (e.g. 'admin').

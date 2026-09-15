@@ -76,21 +76,28 @@ async function postFriends(request, response, user) {
   if (action === 'add') {
     const lookup = String(body.email || body.nickname || '').trim().toLowerCase();
     if (!lookup) return response.status(400).json({ error: 'Enter an email or nickname.' });
+    const esc = lookup.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const target = await (await profileCollection())
       .find({
         $or: [
-          { email: lookup },
-          { email: new RegExp(`^${lookup.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
-          { nickname: new RegExp(`^${lookup.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
+          { email: new RegExp(`^${esc}$`, 'i') },
+          { nickname: new RegExp(`^${esc}$`, 'i') },
+          { nickname: new RegExp(esc, 'i') },
         ],
       })
-      .limit(5)
+      .limit(10)
       .toArray();
     const matched = target.filter((t) => t._id !== user.userId);
-    if (!matched.length) return response.status(404).json({ error: 'No Neon Air user found with that email or nickname.' });
+    if (!matched.length) {
+      return response.status(404).json({ error: 'No Scribble Air user found with that email or nickname.' });
+    }
 
-    // If several nicknames matched, resolve to the exact one or the first.
-    const targetUser = matched.find((t) => (t.email || '').toLowerCase() === lookup || (t.nickname || '').toLowerCase() === lookup) || matched[0];
+    // Prefer an exact email/nickname hit; otherwise fall back to the first
+    // partial (substring) nickname match so loose searches still resolve.
+    const exact = matched.find(
+      (t) => (t.email || '').toLowerCase() === lookup || (t.nickname || '').toLowerCase() === lookup
+    );
+    const targetUser = exact || matched[0];
     const [a, b] = pair(user.userId, targetUser._id);
     const existing = await col.findOne({ userA: a, userB: b });
     if (existing) {

@@ -57,7 +57,7 @@ export default function FriendsModal({ onClose, onChange }: { onClose: () => voi
           {f.avatar || '🙂'}
         </div>
         <div style={{ minWidth: 0 }}>
-          <div style={{ fontSize: 12.5, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.nickname || 'Neon Air drawer'}</div>
+          <div style={{ fontSize: 12.5, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.nickname || 'Scribble Air drawer'}</div>
           <div style={{ fontSize: 10, color: 'var(--text-dim)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.email}</div>
         </div>
       </div>

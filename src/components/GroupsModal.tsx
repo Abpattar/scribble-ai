@@ -172,8 +172,8 @@ export default function GroupsModal({ onClose, onChallenge }: Props) {
                     ))}
 
                     <div className="flex gap-1.5 mt-2">
-                      <div className="gbtn" style={{ flex: 1, justifyContent: 'center' }} onClick={() => act('leave', g.id)}>Leave</div>
-                      <div className="gbtn" style={{ flex: 1, justifyContent: 'center', color: 'var(--kid-pink)' }} onClick={() => act('delete', g.id)}>Delete</div>
+                      <div className="gbtn" style={{ flex: 1, justifyContent: 'center' }} onClick={() => { if (confirm('Leave this group?')) act('leave', g.id); }}>Leave</div>
+                      <div className="gbtn" style={{ flex: 1, justifyContent: 'center', color: 'var(--kid-pink)' }} onClick={() => { if (confirm('Delete this group? This cannot be undone.')) act('delete', g.id); }}>Delete</div>
                       <div className="gbtn" style={{ flex: 1, justifyContent: 'center', color: 'var(--accent2)' }} onClick={() => onChallenge(g)}>Challenge</div>
                     </div>
                   </div>
