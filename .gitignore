@@ -8,3 +8,6 @@ tsconfig.tsbuildinfo
 .env*
 vite.pid
 devserver.pid
+
+# local scratch notes (intentionally not tracked)
+prompt.txt
