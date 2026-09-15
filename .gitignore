@@ -6,3 +6,5 @@ tsconfig.tsbuildinfo
 !.env.example
 .vercel
 .env*
+vite.pid
+devserver.pid
